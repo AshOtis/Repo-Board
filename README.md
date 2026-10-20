@@ -17,14 +17,20 @@ Made for people who publish Obsidian plugins and themes, but it works for any pu
 - **Filters** by label (bug, release, mobile, small, idea and your own), a **Needs a release** filter, **Hide done**, and a **List** view.
 - **+ New task** adds an issue to that repo, with labels.
 
-Problem repos sort to the top. Forks, archived repos and pull requests are left out, and by default so are repos that aren't Obsidian plugins or themes.
+Pinned repos (Settings → **Pin to the top**, handy for a to-do repo) always come first; after them, problem repos sort to the top. Forks, archived repos and pull requests are left out, and by default so are repos that aren't Obsidian plugins or themes.
 
 ## Setup
 
 1. Settings → Repo Board → enter your GitHub user or organisation name.
 2. Open the board from the ribbon or the command **Repo Board: Open the board**.
 3. To tick tasks off and add new ones, add a token (below). Without one the board is read only.
-4. Optional: turn on **Open when Obsidian starts** to make the board your home page, and choose a **Background**: None (your theme shows through), two built-in aurora pictures, or any picture from your vault, with Darken and Blur sliders.
+4. Optional: turn on **Open when Obsidian starts** to make the board your home page, and choose a **Background**: None (your theme shows through), two built-in aurora pictures, any picture from your vault (with Darken and Blur), or **Static Aurora (live colours)**.
+
+### Static Aurora (live colours)
+
+Made for the [Static Aurora](https://github.com/AshOtis/aurora-theme) theme. The board shows the theme's drifting aurora glows, and its chips, tick boxes and highlights take on the same colours (the green, yellow and red release dots keep their meaning). When Static FM, Aurora MP3 or Hi-Fi Tuner recolour the theme, the board changes with it. Glow and Darken sliders set how strong it is. With another theme it uses Static Aurora's default colours.
+
+![Static Aurora colours](docs/aurora.png)
 
 ### The token
 

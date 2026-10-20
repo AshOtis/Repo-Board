@@ -2,9 +2,9 @@
 
 const RB_VIEW = 'repo-board-view';
 const RB_DEFAULTS = {
-  owner: '', token: '', only: '', skip: '', obsidianOnly: true, refreshMins: 30,
+  owner: '', token: '', only: '', skip: '', pin: '', obsidianOnly: true, refreshMins: 30,
   layout: 'board', filter: 'all', hideDone: false, cache: null,
-  bg: 'none', bgImage: '', bgDim: 35, bgBlur: 0, openOnStart: false,
+  bg: 'none', bgImage: '', bgDim: 35, bgBlur: 0, bgGlow: 35, bgAuroraDim: 50, openOnStart: false,
 };
 const RB_QUICK_LABELS = ['bug', 'release', 'mobile', 'small', 'idea'];
 const RB_LEVEL = { bad: 0, warn: 1, ok: 2, none: 3 };
@@ -157,8 +157,10 @@ class RBView extends ItemView {
       return;
     }
 
+    // pinned repos come first, in the order you typed them; then problems first, as before
+    const pins = p.list(d.pin), pinAt = r => { const i = pins.indexOf(r.name.toLowerCase()); return i < 0 ? 1e9 : i; };
     const repos = ((d.cache && d.cache.owner === d.owner && d.cache.repos) || []).slice()
-      .sort((a, b) => (RB_LEVEL[a.status.level] - RB_LEVEL[b.status.level]) || (b.issues.length - a.issues.length) || (b.pushed - a.pushed));
+      .sort((a, b) => (pinAt(a) - pinAt(b)) || (RB_LEVEL[a.status.level] - RB_LEVEL[b.status.level]) || (b.issues.length - a.issues.length) || (b.pushed - a.pushed));
     const isDone = (r, i) => p.done.has(r.name + '#' + i.n);
     const open = repos.reduce((n, r) => n + r.issues.filter(i => !isDone(r, i)).length, 0);
 
@@ -254,12 +256,13 @@ class RBView extends ItemView {
       const f = d.bgImage ? this.app.vault.getAbstractFileByPath(d.bgImage) : null;
       if (f) url = `url("${this.app.vault.getResourcePath(f)}")`; else bg = 'none';
     }
-    for (const k of ['warm', 'north']) host.toggleClass('rb-bg-' + k, bg === k);
+    for (const k of ['warm', 'north', 'aurora']) host.toggleClass('rb-bg-' + k, bg === k);
     host.toggleClass('rb-bg-host', bg !== 'none');
     if (bg === 'none') { host.style.removeProperty('--rb-bg'); return; }
     if (url) host.style.setProperty('--rb-bg', url); else host.style.removeProperty('--rb-bg');
-    host.style.setProperty('--rb-dim', String(d.bgDim / 100));
+    host.style.setProperty('--rb-dim', String((bg === 'aurora' ? (d.bgAuroraDim ?? 50) : d.bgDim) / 100));
     host.style.setProperty('--rb-blur', d.bgBlur + 'px');
+    host.style.setProperty('--rb-glow', String((d.bgGlow ?? 35) / 100));
   }
 
   box(parent, r, i) {
@@ -325,6 +328,8 @@ class RBSettings extends PluginSettingTab {
       .addToggle(t => t.setValue(d.obsidianOnly).onChange(v => { d.obsidianOnly = v; d.cache = null; p.save(); }));
     new Setting(el).setName('Only these repos').setDesc('Repo names separated by commas. Leave empty for all of them.')
       .addText(t => t.setPlaceholder('lantern-focus, static-fm').setValue(d.only).onChange(v => { d.only = v; d.cache = null; p.save(); }));
+    new Setting(el).setName('Pin to the top').setDesc('These repos always come first on the board, in this order, for example a to-do repo. Names separated by commas.')
+      .addText(t => t.setPlaceholder('To-DO').setValue(d.pin || '').onChange(v => { d.pin = v; p.save(); p.redraw(); }));
     new Setting(el).setName('Skip these repos').setDesc('Repo names separated by commas.')
       .addText(t => t.setValue(d.skip).onChange(v => { d.skip = v; d.cache = null; p.save(); }));
     new Setting(el).setName('Refresh').setDesc('How often to check GitHub while the board is open.')
@@ -333,13 +338,22 @@ class RBSettings extends PluginSettingTab {
     new Setting(el).setName('Background').setHeading();
     const bg = d.bg || (d.bgImage ? 'custom' : 'none');
     new Setting(el).setName('Background').setDesc('A picture behind the board. With None, your theme\'s own background shows through.')
-      .addDropdown(dd => dd.addOptions({ none: 'None', warm: 'Aurora (warm)', north: 'Aurora (northern lights)', custom: 'My own picture' }).setValue(bg)
+      .addDropdown(dd => dd.addOptions({ none: 'None', warm: 'Aurora (warm)', north: 'Aurora (northern lights)', aurora: 'Static Aurora (live colours)', custom: 'My own picture' }).setValue(bg)
         .onChange(v => { d.bg = v; p.save(); p.redraw(); this.display(); }));
     if (bg === 'custom') {
       const pick = new Setting(el).setName('Picture').setDesc(d.bgImage ? d.bgImage : 'Pick any picture in your vault.');
       pick.addButton(b => b.setButtonText(d.bgImage ? 'Change' : 'Choose…').onClick(() => new RBImagePicker(this.app, f => { d.bgImage = f.path; p.save(); p.redraw(); this.display(); }).open()));
     }
-    if (bg !== 'none') {
+    if (bg === 'aurora') {
+      const theme = this.app.customCss && this.app.customCss.theme;
+      el.createDiv({ cls: 'setting-item-description', text: theme === 'Static Aurora'
+        ? 'The board shows the theme\'s aurora glows and accents, in the same colours. When Static FM, Aurora MP3 or Hi-Fi Tuner colour the theme, the board changes with it.'
+        : 'Made for the Static Aurora theme, which isn\'t active. The board uses its default colours until you switch to it.' });
+      new Setting(el).setName('Glow').setDesc('How strong the aurora is behind the board.')
+        .addSlider(sl => sl.setLimits(10, 100, 5).setValue(d.bgGlow ?? 35).setDynamicTooltip().onChange(v => { d.bgGlow = v; p.save(); p.redraw(); }));
+      new Setting(el).setName('Darken').setDesc('Dim the glow so the cards stay easy to read.')
+        .addSlider(sl => sl.setLimits(0, 90, 5).setValue(d.bgAuroraDim ?? 50).setDynamicTooltip().onChange(v => { d.bgAuroraDim = v; p.save(); p.redraw(); }));
+    } else if (bg !== 'none') {
       new Setting(el).setName('Darken').setDesc('Dim the picture so the cards stay easy to read.')
         .addSlider(sl => sl.setLimits(0, 90, 5).setValue(d.bgDim).setDynamicTooltip().onChange(v => { d.bgDim = v; p.save(); p.redraw(); }));
       new Setting(el).setName('Blur').setDesc('Soften the picture.')

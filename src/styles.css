@@ -5,6 +5,39 @@
 .rb-bg-north { --rb-bg: url("RB_NORTH"); }
 .rb-bg-host::before { content: ""; position: absolute; inset: -20px; z-index: -2; pointer-events: none; background: var(--rb-bg) center / cover no-repeat; filter: blur(var(--rb-blur, 0)); }
 .rb-bg-host::after { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; background: rgba(0, 0, 0, var(--rb-dim, .6)); }
+/* Static Aurora: the theme's own glows (--sa-c1..4, which the players recolour), drifting behind the board */
+.rb-bg-aurora { --rb-a1: var(--sa-c1, rgb(236, 72, 153)); --rb-a2: var(--sa-c2, rgb(249, 115, 22)); --rb-a3: var(--sa-c3, rgb(180, 83, 9)); --rb-a4: var(--sa-c4, rgb(99, 60, 140)); }
+.rb-bg-aurora.rb-bg-host::before {
+  inset: -25%; filter: none; opacity: var(--rb-glow, .7);
+  background:
+    radial-gradient(38% 34% at 22% 28%, color-mix(in srgb, var(--rb-a1) 90%, transparent), transparent 70%),
+    radial-gradient(42% 38% at 78% 36%, color-mix(in srgb, var(--rb-a2) 85%, transparent), transparent 70%),
+    radial-gradient(40% 36% at 46% 82%, color-mix(in srgb, var(--rb-a3) 90%, transparent), transparent 70%),
+    radial-gradient(34% 30% at 86% 86%, color-mix(in srgb, var(--rb-a4) 80%, transparent), transparent 70%),
+    var(--sa-base, #120e0b);
+  animation: rb-drift 80s ease-in-out infinite alternate;
+}
+/* a faint grain over the dim layer stops the soft gradients from banding */
+.rb-bg-aurora.rb-bg-host::after {
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.05'/%3E%3C/svg%3E"),
+    rgba(0, 0, 0, var(--rb-dim, .35));
+}
+body.sa-still .rb-bg-aurora::before { animation: none; }
+@keyframes rb-drift {
+  0%   { transform: translate3d(-5%, -3%, 0) rotate(0deg) scale(1); }
+  50%  { transform: translate3d(3%, 4%, 0) rotate(6deg) scale(1.06); }
+  100% { transform: translate3d(6%, -2%, 0) rotate(-4deg) scale(1.02); }
+}
+@media (prefers-reduced-motion: reduce) { .rb-bg-aurora::before { animation: none; } }
+/* accents follow the aurora colours (the green/yellow/red release dots keep their meaning) */
+.rb-bg-aurora .rb-card:hover { border-color: color-mix(in srgb, var(--rb-a2) 55%, transparent); }
+.rb-bg-aurora button.rb-chip.is-on, .rb-bg-aurora .rb-modal button.rb-chip.is-on { background: color-mix(in srgb, var(--rb-a1) 24%, transparent); }
+.rb-bg-aurora .rb-seg button.is-on { background: color-mix(in srgb, var(--rb-a1) 20%, transparent); }
+.rb-bg-aurora button.rb-box:hover { border-color: var(--rb-a1); }
+.rb-bg-aurora button.rb-box.is-on { background: linear-gradient(135deg, var(--rb-a1), var(--rb-a2)); }
+.rb-bg-aurora .rb-sync .rb-busy { color: color-mix(in srgb, var(--rb-a1) 60%, #fff); }
+.rb-bg-aurora .rb-top h1 { text-shadow: 0 0 24px color-mix(in srgb, var(--rb-a1) 35%, transparent); }
 .rb-bg-host { overflow: hidden; }
 .rb-bg-host > .view-header, .rb-bg-host > .view-content { background: transparent; }
 .rb-bg-host .rb-card, .rb-bg-host .rb-stat { background: color-mix(in srgb, var(--background-primary) 72%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
