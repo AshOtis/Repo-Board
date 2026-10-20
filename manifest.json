@@ -1,0 +1,11 @@
+{
+  "id": "repo-board",
+  "name": "Repo Board",
+  "version": "1.0.0",
+  "minAppVersion": "1.5.0",
+  "description": "A board of your GitHub repos in a tab: open issues as tasks you can tick off, and whether each plugin or theme release is ready for the directory.",
+  "author": "AshOtis",
+  "authorUrl": "https://github.com/AshOtis",
+  "fundingUrl": "https://buymeacoffee.com/ashotis",
+  "isDesktopOnly": false
+}
