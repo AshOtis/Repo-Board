@@ -14,10 +14,15 @@ Made for people who publish Obsidian plugins and themes, but it works for any pu
   - 🟡 the version in `manifest.json` is newer than the last release, or there's no release yet
   - 🔴 the release is missing `main.js` / `theme.css` / `manifest.json`, or the tag doesn't match the version (for example `v1.0.2` instead of `1.0.2`)
 - **Totals** for open tasks, releases waiting and checks failing.
+- **Tracker**: a third view next to Board and List, with a year of commits across all your repos as a grid (like GitHub's), your streaks and busiest day, and a week-by-week bar for each repo.
 - **Filters** by label (bug, release, mobile, small, idea and your own), a **Needs a release** filter, **Hide done**, and a **List** view.
 - **+ New task** adds an issue to that repo, with labels.
 
-Pinned repos (Settings → **Pin to the top**, handy for a to-do repo) always come first; after them, problem repos sort to the top. Forks, archived repos and pull requests are left out, and by default so are repos that aren't Obsidian plugins or themes.
+**Dim empty** (in the filter row) fades repos with nothing to do. It also happens by itself while a [Lantern Focus](https://github.com/AshOtis/lantern-focus) session is running, so the repos with work stand out.
+
+Cards of different heights pack upwards, so a short card never leaves a gap above the one beneath it.
+
+Pinned repos (Settings → **Pin to the top**, handy for a to-do repo) always come first; after them, problem repos sort to the top. Forks, archived repos and pull requests are left out, and by default so are repos that aren't Obsidian plugins or themes. Private repos are left out too, until you turn on **Include private repos** in settings (a token is needed); they get a padlock on their card.
 
 ## Setup
 
@@ -36,13 +41,15 @@ Made for the [Static Aurora](https://github.com/AshOtis/aurora-theme) theme. The
 
 Make a **fine-grained personal access token** on GitHub (Settings → Developer settings → Fine-grained tokens) with **Issues: Read and write** on the repos you want. Paste it into the plugin's settings.
 
+For private repos, give the token **Contents: Read** as well, on the repos you want to see.
+
 The token is stored in this plugin's `data.json` inside your vault. Don't include it in a vault you share or publish.
 
 A token also raises GitHub's limit from 60 to 5,000 requests an hour. Without one, refresh by hand or every hour.
 
 ## Privacy and network
 
-Repo Board talks only to `api.github.com`, and only to read your repos, issues, releases and `manifest.json`, and to close, reopen or create issues when you ask it to. Nothing else is sent anywhere. Results are cached in the plugin's `data.json` so the board opens instantly.
+Repo Board talks only to `api.github.com`, and only to read your repos, issues, releases, commit counts and `manifest.json`, and to close, reopen or create issues when you ask it to. Nothing else is sent anywhere. Results are cached in the plugin's `data.json` so the board opens instantly. If you include private repos, their names and issue titles are cached there too.
 
 ## Support
 

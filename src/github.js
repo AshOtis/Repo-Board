@@ -18,6 +18,8 @@ class RBGitHub {
     const h = {}; for (const k in (r.headers || {})) h[k.toLowerCase()] = r.headers[k];
     if (h['x-ratelimit-remaining'] != null) this.remaining = Number(h['x-ratelimit-remaining']);
     if (h['x-ratelimit-reset'] != null) this.resetAt = Number(h['x-ratelimit-reset']) * 1000;
+    if (r.status === 202) return { pending: true };   // GitHub is still working the stats out
+    if (r.status === 204) return null;                  // empty repo
     if (r.status === 404) return null;
     if (r.status >= 400) {
       let msg = 'GitHub said ' + r.status;
@@ -29,15 +31,29 @@ class RBGitHub {
     return opts.raw ? r.text : r.json;
   }
 
-  async listRepos(owner) {
+  // One listing, a page at a time. Returns null when the first page is a 404.
+  async pages(path) {
     const out = [];
     for (let page = 1; page <= 5; page++) {
-      const list = await this.req(`/users/${encodeURIComponent(owner)}/repos?per_page=100&sort=pushed&page=${page}`);
-      if (!list) { const e = new Error(`No GitHub user or organisation called "${owner}".`); e.status = 404; throw e; }
+      const list = await this.req(path + (path.includes('?') ? '&' : '?') + `per_page=100&page=${page}`);
+      if (!Array.isArray(list)) return page === 1 ? null : out;
       out.push(...list);
       if (list.length < 100) break;
     }
     return out;
+  }
+
+  async listRepos(owner, includePrivate) {
+    const o = encodeURIComponent(owner);
+    if (includePrivate && (this.getToken() || '').trim()) {
+      const me = await this.req('/user');
+      if (me && String(me.login).toLowerCase() === owner.toLowerCase()) return (await this.pages('/user/repos?affiliation=owner&sort=pushed')) || [];
+      const org = await this.pages(`/orgs/${o}/repos?type=all&sort=pushed`);
+      if (org) return org;
+    }
+    const list = await this.pages(`/users/${o}/repos?sort=pushed`);
+    if (!list) { const e = new Error(`No GitHub user or organisation called "${owner}".`); e.status = 404; throw e; }
+    return list;
   }
 
   async openIssues(owner, repo) {
@@ -48,6 +64,16 @@ class RBGitHub {
       if (list.length < 100) break;
     }
     return out;
+  }
+
+  // 52 weeks of daily commit counts. GitHub works these out on first ask, so wait a moment and try once more.
+  async commitActivity(owner, repo) {
+    for (let t = 0; t < 2; t++) {
+      const r = await this.req(`/repos/${owner}/${repo}/stats/commit_activity`);
+      if (Array.isArray(r) && r.length) return r;
+      if (r && r.pending) await new Promise(res => window.setTimeout(res, 1500)); else return null;
+    }
+    return null;
   }
 
   latestRelease(owner, repo) { return this.req(`/repos/${owner}/${repo}/releases/latest`); }

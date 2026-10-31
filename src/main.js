@@ -3,7 +3,7 @@
 const RB_VIEW = 'repo-board-view';
 const RB_DEFAULTS = {
   owner: '', token: '', only: '', skip: '', pin: '', obsidianOnly: true, refreshMins: 30,
-  layout: 'board', filter: 'all', hideDone: false, cache: null,
+  includePrivate: false, dimEmpty: false, layout: 'board', filter: 'all', hideDone: false, cache: null, commits: null,
   bg: 'none', bgImage: '', bgDim: 35, bgBlur: 0, bgGlow: 35, bgAuroraDim: 50, openOnStart: false,
 };
 const RB_QUICK_LABELS = ['bug', 'release', 'mobile', 'small', 'idea'];
@@ -14,6 +14,7 @@ class RepoBoard extends Plugin {
     this.d = Object.assign({}, RB_DEFAULTS, await this.loadData());
     this.gh = new RBGitHub(() => this.d.token);
     this.loading = false; this.error = '';
+    this.loadingCommits = false; this.commitsError = '';
     this.done = new Set();            // issues closed from the board this session ("owner/repo#n")
     this.registerView(RB_VIEW, leaf => new RBView(leaf, this));
     this.addRibbonIcon('kanban-square', 'Open Repo Board', () => this.open());
@@ -21,7 +22,10 @@ class RepoBoard extends Plugin {
     this.addCommand({ id: 'refresh', name: 'Refresh from GitHub', callback: () => this.refresh(true) });
     this.addSettingTab(new RBSettings(this.app, this));
     // keep it fresh while a board is open
-    this.registerInterval(window.setInterval(() => { if (this.views().length && this.stale()) this.refresh(); }, 60000));
+    this.registerInterval(window.setInterval(() => {
+      if (!this.views().length) return;
+      if (this.stale()) this.refresh(); else if (this.d.layout === 'tracker' && this.commitsStale()) this.refreshCommits();
+    }, 60000));
     // optional: open the board (or bring it to the front) every time Obsidian starts
     this.app.workspace.onLayoutReady(() => { if (this.d.openOnStart) this.open(); });
   }
@@ -51,7 +55,7 @@ class RepoBoard extends Plugin {
     this.loading = true; this.error = ''; this.redraw();
     try {
       const only = this.list(this.d.only), skip = this.list(this.d.skip);
-      let repos = (await this.gh.listRepos(owner)).filter(r => !r.archived && !r.fork);
+      let repos = (await this.gh.listRepos(owner, this.d.includePrivate)).filter(r => !r.archived && !r.fork);
       if (only.length) repos = repos.filter(r => only.includes(r.name.toLowerCase()));
       repos = repos.filter(r => !skip.includes(r.name.toLowerCase()));
       const out = await rbPool(repos, 4, async r => {
@@ -62,7 +66,7 @@ class RepoBoard extends Plugin {
           manifest ? this.gh.latestRelease(owner, r.name) : Promise.resolve(null),
         ]);
         return {
-          name: r.name, title: (manifest && manifest.name) || r.name, url: r.html_url, pushed: Date.parse(r.pushed_at) || 0,
+          name: r.name, title: (manifest && manifest.name) || r.name, url: r.html_url, pushed: Date.parse(r.pushed_at) || 0, private: !!r.private,
           kind: manifest ? (manifest.id ? 'plugin' : 'theme') : 'repo',
           status: manifest ? rbStatus(manifest, release) : { level: 'none', text: r.description || 'Repository' },
           issues: issues.map(i => ({ n: i.number, title: i.title, url: i.html_url, at: Date.parse(i.created_at) || 0,
@@ -78,6 +82,44 @@ class RepoBoard extends Plugin {
       if (loud) new Notice('Repo Board: ' + this.error);
     } finally {
       this.loading = false; this.redraw();
+    }
+    if (this.d.layout === 'tracker' && !this.error) this.refreshCommits();
+  }
+
+  // Is the commit history for the Tracker missing, out of date, or lacking a repo that has since appeared?
+  commitsStale() {
+    const c = this.d.commits, cache = this.d.cache;
+    if (!cache || cache.owner !== this.d.owner || this.loadingCommits || this.commitsError) return false;
+    if (!c || c.owner !== this.d.owner) return true;
+    const known = new Set(Object.keys(c.repos).concat(c.missing || []));
+    if (cache.repos.some(r => !known.has(r.name))) return true;
+    const age = Date.now() - c.at;
+    if ((c.missing || []).length && age > 5 * 60000) return true;   // GitHub was still counting: ask again
+    return age > Math.max(this.d.refreshMins || 60, 15) * 60000;
+  }
+
+  // A year of commits for every repo on the board: one request each, a few at a time
+  async refreshCommits(loud) {
+    const owner = this.d.owner.trim(), cache = this.d.cache;
+    if (!owner || this.loadingCommits || !cache || cache.owner !== owner) return;
+    this.loadingCommits = true; this.commitsError = ''; this.redraw();
+    try {
+      const prev = (this.d.commits && this.d.commits.owner === owner && this.d.commits.repos) || {};
+      const repos = {}, missing = [];
+      await rbPool(cache.repos, 4, async r => {
+        const a = await this.gh.commitActivity(owner, r.name);
+        if (a) repos[r.name] = { w: a[0].week, d: [].concat(...a.map(w => w.days)) };   // w: when the first week starts (seconds), d: commits per day
+        else if (prev[r.name]) repos[r.name] = prev[r.name];
+        else missing.push(r.name);
+      });
+      this.d.commits = { owner, at: Date.now(), repos, missing };
+      await this.save();
+      if (loud) new Notice(missing.length ? 'Repo Board: GitHub is still counting commits for ' + missing.length + ' repo(s). Try again in a minute.' : 'Repo Board: commits up to date.');
+    } catch (e) {
+      this.commitsError = e.message || String(e);
+      if (loud) new Notice('Repo Board: ' + this.commitsError);
+    } finally {
+      this.loadingCommits = false; this.redraw();
     }
   }
 
@@ -130,6 +172,8 @@ class RBView extends ItemView {
     this.registerInterval(window.setInterval(() => { if (this.syncEl) this.paintSync(); }, 30000));
   }
 
+  async onClose() { if (this.ro) this.ro.disconnect(); }
+
   paintSync() {
     const p = this.plugin, c = p.d.cache;
     this.syncEl.empty();
@@ -139,14 +183,14 @@ class RBView extends ItemView {
     else if (c) this.syncEl.createSpan({ cls: 'rb-ok', text: 'synced ' + rbAgo(c.at) });
     const rf = this.syncEl.createEl('button', { cls: 'rb-icon', attr: { 'aria-label': 'Refresh from GitHub' } });
     setIcon(rf, 'refresh-cw'); rf.onclick = () => p.refresh(true);
-    if (!p.canWrite()) this.syncEl.createSpan({ cls: 'rb-hint', text: ' · read only' });
+    if (!p.canWrite()) this.syncEl.createSpan({ cls: 'rb-hint', text: ' · read only' + (p.d.includePrivate ? ' · private repos need a token' : '') });
   }
 
   render() {
     const p = this.plugin, d = p.d, el = this.contentEl;
     el.empty();
     this.paintBackground();
-    const wrap = el.createDiv({ cls: 'rb-wrap' });
+    const wrap = el.createDiv({ cls: 'rb-wrap' + (d.dimEmpty ? ' rb-dim' : '') });
 
     if (!d.owner) {
       const e = wrap.createDiv({ cls: 'rb-empty' });
@@ -180,25 +224,40 @@ class RBView extends ItemView {
     repos.forEach(r => r.issues.forEach(i => i.labels.forEach(l => { counts[l.name] = (counts[l.name] || 0) + 1; })));
     const names = Array.from(new Set(RB_QUICK_LABELS.filter(n => counts[n]).concat(Object.keys(counts).sort((a, b) => counts[b] - counts[a])))).slice(0, 9);
     if (d.filter !== 'all' && d.filter !== 'problems' && !counts[d.filter]) d.filter = 'all';
+    const tracker = d.layout === 'tracker';   // the Tracker page has no task filters
     const bar = wrap.createDiv({ cls: 'rb-bar' });
     const chip = (key, text) => {
       const c = bar.createEl('button', { cls: 'rb-chip' + (d.filter === key ? ' is-on' : ''), text });
       c.onclick = () => { d.filter = key; p.save(); this.render(); };
     };
-    chip('all', 'All'); chip('problems', 'Needs a release');
-    names.forEach(n => chip(n, n.charAt(0).toUpperCase() + n.slice(1)));
+    if (!tracker) {
+      chip('all', 'All'); chip('problems', 'Needs a release');
+      names.forEach(n => chip(n, n.charAt(0).toUpperCase() + n.slice(1)));
+      // not a filter: a switch that fades repos with nothing to do, the same look Lantern Focus gives while a session runs
+      const dim = bar.createEl('button', { cls: 'rb-chip rb-chip-dim' + (d.dimEmpty ? ' is-on' : ''), text: 'Dim empty', attr: { 'aria-label': 'Fade repos with nothing to do' } });
+      dim.onclick = () => { d.dimEmpty = !d.dimEmpty; p.save(); this.render(); };
+    }
     bar.createDiv({ cls: 'rb-sp' });
-    const hd = bar.createEl('label', { cls: 'rb-check' });
-    const cb = hd.createEl('input', { type: 'checkbox' }); cb.checked = d.hideDone; hd.appendText(' Hide done');
-    cb.onchange = () => { d.hideDone = cb.checked; p.save(); this.render(); };
+    if (!tracker) {
+      const hd = bar.createEl('label', { cls: 'rb-check' });
+      const cb = hd.createEl('input', { type: 'checkbox' }); cb.checked = d.hideDone; hd.appendText(' Hide done');
+      cb.onchange = () => { d.hideDone = cb.checked; p.save(); this.render(); };
+    }
     const seg = bar.createDiv({ cls: 'rb-seg' });
-    [['board', 'Board'], ['list', 'List']].forEach(([k, t]) => {
+    [['board', 'Board'], ['list', 'List'], ['tracker', 'Tracker']].forEach(([k, t]) => {
       const b = seg.createEl('button', { cls: d.layout === k ? 'is-on' : '', text: t });
       b.onclick = () => { d.layout = k; p.save(); this.render(); };
     });
 
     if (!repos.length) {
       wrap.createDiv({ cls: 'rb-none', text: p.loading ? 'Fetching your repos from GitHub…' : p.error ? 'Nothing to show yet.' : 'No repos found. Check the name in settings, or turn off "Only Obsidian plugins and themes".' });
+      return;
+    }
+
+    if (tracker) {
+      this.tracker(wrap, repos);
+      // fetch the commit history if it's missing or old (after this draw, so it doesn't redraw in the middle of one)
+      if (p.commitsStale()) window.setTimeout(() => p.refreshCommits(), 0);
       return;
     }
 
@@ -228,10 +287,12 @@ class RBView extends ItemView {
       const h = card.createDiv({ cls: 'rb-rh' });
       const nm = h.createEl('a', { cls: 'rb-rn', text: r.title, href: r.url, attr: { title: 'Open ' + r.name + ' on GitHub' } });
       nm.onclick = e => e.stopPropagation();
+      if (r.private) { const lk = h.createSpan({ cls: 'rb-lock', attr: { 'aria-label': 'Private repo' } }); setIcon(lk, 'lock'); }
       h.createSpan({ cls: 'rb-kind', text: r.kind });
       const st = card.createDiv({ cls: 'rb-rel' });
       st.createSpan({ cls: 'rb-dot is-' + r.status.level }); st.createSpan({ text: r.status.text });
       const tasks = r.issues.filter(i => showIssue(r, i)).sort((a, b) => a.at - b.at);
+      card.toggleClass('is-empty', !tasks.length);   // Lantern Focus dims these while a session runs
       if (!tasks.length) card.createDiv({ cls: 'rb-task-none', text: 'Nothing to do' });
       tasks.forEach(i => {
         const row = card.createDiv({ cls: 'rb-task' + (isDone(r, i) ? ' is-done' : '') });
@@ -246,6 +307,118 @@ class RBView extends ItemView {
         add.onclick = () => new RBNewIssue(this.app, p, r).open();
       }
     });
+    this.masonry(board);
+  }
+
+  // Cards of different heights pack upwards instead of sitting on strict rows: the board is a grid of thin 4px rows
+  // and each card spans as many as it needs, so the next card slides up into the gap beneath a short one.
+  masonry(board) {
+    if (this.ro) this.ro.disconnect();
+    this.ro = new ResizeObserver(entries => entries.forEach(e => {
+      const c = e.target;
+      c.style.gridRowEnd = 'span ' + Math.ceil((c.offsetHeight + 14) / 4);   // 14px = the gap between cards
+    }));
+    board.querySelectorAll('.rb-card').forEach(c => this.ro.observe(c));
+  }
+
+  // The Tracker page: a year of commits as a grid, a few totals, then the same year repo by repo
+  tracker(wrap, repos) {
+    const p = this.plugin, d = p.d, c = d.commits, DAY = 864e5;
+    const head = wrap.createDiv({ cls: 'rb-panel' });
+    const ok = c && c.owner === d.owner;
+    if (!ok) {
+      head.createDiv({ cls: 'rb-none', text: p.loadingCommits ? 'Counting your commits on GitHub…' : p.commitsError ? 'Could not load commits: ' + p.commitsError : 'Fetching your commit history…' });
+      if (p.commitsError) { const b = head.createEl('button', { text: 'Try again' }); b.onclick = () => p.refreshCommits(true); }
+      return;
+    }
+
+    // line the data up with a 52-week grid that ends this week (weeks start on Sunday, in UTC like GitHub's)
+    const now = new Date(), today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    const first = today - now.getUTCDay() * DAY - 51 * 7 * DAY, todayAt = Math.round((today - first) / DAY);
+    const perRepo = {}, all = new Array(364).fill(0);
+    repos.forEach(r => {
+      const rc = c.repos[r.name]; if (!rc) return;
+      const a = new Array(364).fill(0);
+      rc.d.forEach((n, i) => { const k = Math.round((rc.w * 1000 + i * DAY - first) / DAY); if (k >= 0 && k < 364) a[k] = n; });
+      perRepo[r.name] = a; a.forEach((n, i) => { all[i] += n; });
+    });
+    const days = all.slice(0, todayAt + 1);
+    const sum = days.reduce((a, b) => a + b, 0), active = days.filter(Boolean).length;
+    let best = 0, run = 0; days.forEach(n => { run = n ? run + 1 : 0; if (run > best) best = run; });
+    let cur = 0, k = days.length - 1; if (!days[k]) k--;   // a quiet day so far today doesn't break the streak
+    while (k >= 0 && days[k]) { cur++; k--; }
+    const busy = Math.max(0, ...days), busyAt = days.indexOf(busy);
+    const fmt = t => new Date(t).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+
+    // heading
+    const ph = head.createDiv({ cls: 'rb-ph' });
+    ph.createDiv({ cls: 'rb-pt', text: sum.toLocaleString() + ' commit' + (sum === 1 ? '' : 's') + ' in the last year' });
+    const sub = ph.createDiv({ cls: 'rb-sync' });
+    sub.createSpan({ text: 'across ' + Object.keys(perRepo).length + ' repos · ' });
+    sub.createSpan({ cls: p.loadingCommits ? 'rb-busy' : 'rb-ok', text: p.loadingCommits ? 'updating…' : 'updated ' + rbAgo(c.at) });
+    const rf = sub.createEl('button', { cls: 'rb-icon', attr: { 'aria-label': 'Refresh commits' } });
+    setIcon(rf, 'refresh-cw'); rf.onclick = () => p.refreshCommits(true);
+    if (p.commitsError) sub.createSpan({ cls: 'rb-err', text: ' · ' + p.commitsError });
+    if (c.missing && c.missing.length) sub.createSpan({ cls: 'rb-hint', text: ' · GitHub is still counting ' + c.missing.join(', ') });
+
+    // the grid: columns are weeks, rows are Sun to Sat; five shades, cut at the quartiles of your busy days
+    const busyDays = days.filter(Boolean).sort((a, b) => a - b);
+    const q = f => busyDays.length ? busyDays[Math.min(busyDays.length - 1, Math.floor(busyDays.length * f))] : 0;
+    const q1 = q(.25), q2 = q(.5), q3 = q(.75);
+    const level = n => !n ? 0 : n <= q1 ? 1 : n <= q2 ? 2 : n <= q3 ? 3 : 4;
+    const scroll = head.createDiv({ cls: 'rb-heat-scroll' });
+    const heat = scroll.createDiv({ cls: 'rb-heat' });
+    ['', 'Mon', '', 'Wed', '', 'Fri', ''].forEach((t, j) => { if (t) { const l = heat.createDiv({ cls: 'rb-dow', text: t }); l.style.gridRow = String(j + 2); } });
+    let lastMonth = -1;
+    for (let w = 0; w < 52; w++) {
+      const sun = new Date(first + w * 7 * DAY), month = sun.getUTCMonth();
+      if (month !== lastMonth) {
+        if (!(w === 0 && sun.getUTCDate() > 20)) { const m = heat.createDiv({ cls: 'rb-month', text: sun.toLocaleDateString(undefined, { month: 'short', timeZone: 'UTC' }) }); m.style.gridColumn = String(w + 2); }
+        lastMonth = month;
+      }
+      for (let j = 0; j < 7; j++) {
+        const i = w * 7 + j; if (i > todayAt) break;
+        const cell = heat.createDiv({ cls: 'rb-cell l' + level(all[i]), attr: { 'aria-label': (all[i] || 'No') + ' commit' + (all[i] === 1 ? '' : 's') + ' on ' + fmt(first + i * DAY) } });
+        cell.style.gridColumn = String(w + 2); cell.style.gridRow = String(j + 2);
+      }
+    }
+    const key = head.createDiv({ cls: 'rb-key' });
+    key.createSpan({ text: 'Less' }); for (let l = 0; l <= 4; l++) key.createDiv({ cls: 'rb-cell l' + l }); key.createSpan({ text: 'More' });
+
+    // totals
+    const stats = wrap.createDiv({ cls: 'rb-stats rb-tiles' });
+    const tile = (n, l) => { const s = stats.createDiv({ cls: 'rb-stat' }); s.createDiv({ cls: 'rb-n', text: String(n) }); s.createDiv({ cls: 'rb-l', text: l }); };
+    tile(active, 'active days');
+    tile(cur + (cur === 1 ? ' day' : ' days'), 'current streak');
+    tile(best + (best === 1 ? ' day' : ' days'), 'longest streak');
+    tile(busy, busy ? 'most in a day · ' + new Date(first + busyAt * DAY).toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone: 'UTC' }) : 'most in a day');
+    tile(days.slice(-30).reduce((a, b) => a + b, 0), 'last 30 days');
+
+    // each repo's year, week by week
+    const rows = repos.filter(r => perRepo[r.name]).map(r => {
+      const a = perRepo[r.name], weekly = [];
+      for (let w = 0; w < 52; w++) weekly.push(a.slice(w * 7, w * 7 + 7).reduce((x, y) => x + y, 0));
+      return { r, weekly, total: a.reduce((x, y) => x + y, 0), recent: a.slice(Math.max(0, todayAt - 29), todayAt + 1).reduce((x, y) => x + y, 0) };
+    }).sort((a, b) => (b.recent - a.recent) || (b.total - a.total));
+    const panel = wrap.createDiv({ cls: 'rb-panel' });
+    panel.createDiv({ cls: 'rb-pt', text: 'Commits by repo' });
+    const t = panel.createEl('table', { cls: 'rb-table' });
+    const hr = t.createEl('thead').createEl('tr');
+    ['Repo', 'Last 52 weeks', 'Year', '30 days', 'Last push'].forEach(h => hr.createEl('th', { text: h }));
+    const tb = t.createEl('tbody');
+    rows.forEach(({ r, weekly, total, recent }) => {
+      const tr = tb.createEl('tr');
+      const nm = tr.createEl('td', { cls: 'rb-repo-name' });
+      nm.createEl('a', { cls: 'rb-tt', text: r.title, href: r.url });
+      if (r.private) { const lk = nm.createSpan({ cls: 'rb-lock', attr: { 'aria-label': 'Private repo' } }); setIcon(lk, 'lock'); }
+      const sp = tr.createEl('td').createDiv({ cls: 'rb-spark' });
+      const top = Math.max(1, ...weekly);
+      weekly.forEach((n, w) => { const b = sp.createDiv({ cls: 'rb-spark-bar' + (n ? '' : ' is-zero'), attr: { 'aria-label': n + ' commit' + (n === 1 ? '' : 's') + ', week of ' + fmt(first + w * 7 * DAY) } }); b.style.height = Math.max(8, Math.round(n / top * 100)) + '%'; });
+      tr.createEl('td', { cls: 'rb-num-cell', text: total.toLocaleString() });
+      tr.createEl('td', { cls: 'rb-num-cell', text: recent.toLocaleString() });
+      tr.createEl('td', { cls: 'rb-repo', text: r.pushed ? rbAgo(r.pushed) : '' });
+    });
+    if (!rows.length) panel.createDiv({ cls: 'rb-none', text: 'No commits found.' });
   }
 
   // what sits behind the board: nothing (your theme shows through), one of the built-in aurora pictures, or your own picture
@@ -322,6 +495,12 @@ class RBSettings extends PluginSettingTab {
       f.appendText('Optional for public repos. Needed to tick tasks off and add new ones, and raises GitHub\'s limit from 60 to 5,000 requests an hour. ');
       f.appendText('Make a fine-grained token with "Issues: Read and write" on your repos. It is saved in this plugin\'s data.json in your vault, so leave it out of any vault you share publicly.');
     })).addText(t => { t.inputEl.type = 'password'; t.setPlaceholder('github_pat_…').setValue(d.token).onChange(v => { d.token = v.trim(); p.save(); p.redraw(); }); });
+    new Setting(el).setName('Include private repos').setDesc('Show your private repos on the board too, marked with a padlock. Needs a token that can read them: a fine-grained token with Contents (read) and Issues (read and write) on those repos. Their names and issue titles are kept in this plugin\'s data.json.')
+      .addToggle(t => t.setValue(d.includePrivate).onChange(v => {
+        d.includePrivate = v; d.cache = null; d.commits = null; p.save();
+        if (v && !p.canWrite()) new Notice('Repo Board: add a GitHub token first, private repos can\'t be read without one.');
+        p.redraw(); p.refresh();
+      }));
     new Setting(el).setName('Open when Obsidian starts').setDesc('Show the board as the front tab every time you open this vault.')
       .addToggle(t => t.setValue(d.openOnStart).onChange(v => { d.openOnStart = v; p.save(); }));
     new Setting(el).setName('Only Obsidian plugins and themes').setDesc('Hide repos without a manifest.json.')
