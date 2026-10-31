@@ -159,3 +159,6 @@ body.sa-still .rb-bg-aurora::before { animation: none; }
 .rb-card { transition: opacity .6s ease, filter .6s ease; }
 .rb-dim .rb-card.is-empty, body.lantern-focus-on .rb-card.is-empty { opacity: .28; filter: saturate(.4); }
 .rb-dim .rb-card.is-empty:hover, body.lantern-focus-on .rb-card.is-empty:hover { opacity: .7; filter: none; }
+
+/* optional: hide Obsidian's title bar (back/forward arrows) above the board */
+body:not(.is-mobile) .rb-no-header > .view-header { display: none; }   /* phones and tablets keep it: it holds the sidebar and menu buttons */

@@ -3,7 +3,7 @@
 const RB_VIEW = 'repo-board-view';
 const RB_DEFAULTS = {
   owner: '', token: '', only: '', skip: '', pin: '', obsidianOnly: true, refreshMins: 30,
-  includePrivate: false, dimEmpty: false, layout: 'board', filter: 'all', hideDone: false, cache: null, commits: null,
+  includePrivate: false, dimEmpty: false, hideHeader: true, layout: 'board', filter: 'all', hideDone: false, cache: null, commits: null,
   bg: 'none', bgImage: '', bgDim: 35, bgBlur: 0, bgGlow: 35, bgAuroraDim: 50, openOnStart: false,
 };
 const RB_QUICK_LABELS = ['bug', 'release', 'mobile', 'small', 'idea'];
@@ -189,6 +189,7 @@ class RBView extends ItemView {
   render() {
     const p = this.plugin, d = p.d, el = this.contentEl;
     el.empty();
+    this.containerEl.toggleClass('rb-no-header', d.hideHeader !== false);   // Obsidian's own back/forward bar above the board
     this.paintBackground();
     const wrap = el.createDiv({ cls: 'rb-wrap' + (d.dimEmpty ? ' rb-dim' : '') });
 
@@ -501,6 +502,8 @@ class RBSettings extends PluginSettingTab {
         if (v && !p.canWrite()) new Notice('Repo Board: add a GitHub token first, private repos can\'t be read without one.');
         p.redraw(); p.refresh();
       }));
+    new Setting(el).setName('Hide the title bar').setDesc('Hides the bar with the back and forward arrows above the board, for a cleaner page. The tab itself stays.')
+      .addToggle(t => t.setValue(d.hideHeader !== false).onChange(v => { d.hideHeader = v; p.save(); p.redraw(); }));
     new Setting(el).setName('Open when Obsidian starts').setDesc('Show the board as the front tab every time you open this vault.')
       .addToggle(t => t.setValue(d.openOnStart).onChange(v => { d.openOnStart = v; p.save(); }));
     new Setting(el).setName('Only Obsidian plugins and themes').setDesc('Hide repos without a manifest.json.')
